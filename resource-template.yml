@@ -1,0 +1,93 @@
+# ------------------------------------------------------------------------------------ #
+# Description:
+#   Template for deploying the [~ResourceType~] resource.
+#
+# Documentation:
+#
+# ------------------------------------------------------------------------------------ #
+
+parameters:
+- name: connectedServiceName
+  type: string
+
+- name: resourceGroupLocation
+  type: string
+  default: ''
+
+- name: resourceGroupName
+  type: string
+
+- name: resourceTags
+  type: object
+  default: {}
+
+- name: resourceTagsString
+  type: string
+  default: ''
+
+- name: subscriptionID
+  type: string
+
+- name: [~ParameterName~]
+  type: string
+
+steps:
+# Validates that all the template parameters match the template schema.
+- template: ../../common/validation/AA.Parameters/validate-parameters.yml
+  parameters:
+    excludeParameterNames:
+    - ${{ if not(parameters.resourceGroupLocation) }}:
+      - resourceGroupLocation
+    - ${{ if not(parameters.resourceTagsString) }}:
+      - resourceTagsString
+    name: [~ResourceIdentifier~]
+    parameters: '${{ parameters }}'
+    schemaPath: $(Agent.BuildDirectory)/paf/resources/AA.[~ResourceType~]/resource-template-schema.yml
+
+# Either derives the tags from the resource group, or uses the supplied resource tags to override.
+- ${{ if not(parameters.resourceTagsString) }}:
+  - template: ../../common/tasks/AA.ResourceTags/build-resource-tags.yml
+    parameters:
+      connectedServiceName: '${{ parameters.connectedServiceName }}'
+      name: [~ResourceIdentifier~]
+      outputVariable: _resourceTags
+      resourceTags: '${{ parameters.resourceTags }}'
+
+# Gets the location of the resource group, if it wasn't supplied.
+- ${{ if not(parameters.resourceGroupLocation) }}:
+  - template: ../../common/tasks/AA.ResourceGroupLocation/get-resource-group-location.yml
+    parameters:
+      connectedServiceName: '${{ parameters.connectedServiceName }}'
+      name: [~ResourceIdentifier~]
+      outputVariable: _resourceGroupLocation
+      resourceGroupName: '${{ parameters.resourceGroupName }}'
+
+# Builds the override parameters, to be used for the ARM template deployment.
+- template: ../../common/tasks/AA.BuildOverrideParameters/build-override-parameters.yml
+  parameters:
+    name: [~ResourceIdentifier~]
+    outputVariable: _overrideParameters
+    overrideParameters:
+      [~ResourceOverrideParameters~]
+
+# Deploy the resource using the ARM template.
+- task: AzureResourceManagerTemplateDeployment@3
+  displayName: '[~ResourceIdentifier~]: Deploying the ARM template for "[~ResourceType~]"'
+  inputs:
+    ${{ if not(parameters.resourceGroupLocation) }}:
+      location: $(_resourceGroupLocation)
+    ${{ if parameters.resourceTagsString }}:
+      overrideParameters: '$(_overrideParameters) -resourceTags ${{ parameters.resourceTagsString }}'
+    ${{ if parameters.resourceGroupLocation }}:
+      location: '${{ parameters.resourceGroupLocation }}'
+    ${{ if not(parameters.resourceTagsString) }}:
+      overrideParameters: $(_overrideParameters) -resourceTags $(_resourceTags)
+    action: Create Or Update Resource Group
+    connectedServiceName: '${{ parameters.connectedServiceName }}'
+    csmFile: $(Agent.BuildDirectory)/paf/resources/AA.[~ResourceType~]/[~ResourceType~].Template.json
+    csmParametersFile: $(Agent.BuildDirectory)/paf/resources/AA.[~ResourceType~]/[~ResourceType~].Parameters.json
+    deploymentMode: Incremental
+    deploymentScope: Resource Group
+    resourceGroupName: '${{ parameters.resourceGroupName }}'
+    subscriptionName: '${{ parameters.subscriptionID }}'
+    templateLocation: Linked artifact
